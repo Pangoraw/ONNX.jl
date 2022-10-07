@@ -48,6 +48,7 @@ end
 add(xs...) = .+(xs...)
 sub(xs...) = .-(xs...)
 mul(xs...) = .*(xs...)
+div(xs...) = ./(xs...)
 relu(x) = NNlib.relu.(x)
 elu(x) = NNlib.elu.(x)
 tanh(x) = Base.tanh.(x)
@@ -121,7 +122,7 @@ function global_average_pool(x)
 end
 
 
-size_vector(x) = SVector(size(x))
+size_vector(x) = SVector(reverse(size(x)))
 
 
 """

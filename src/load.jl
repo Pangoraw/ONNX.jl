@@ -122,6 +122,10 @@ function load_node!(tape::Tape, ::OpConfig{:ONNX, :Mul}, args::VarVec, attrs::At
     return push_call!(tape, mul, args...)
 end
 
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :Div}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, div, args...)
+end
+
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :Relu}, args::VarVec, attrs::AttrDict)
     return push_call!(tape, relu, args[1])
 end
@@ -134,18 +138,67 @@ function load_node!(tape::Tape, ::OpConfig{:ONNX, :Tanh}, args::VarVec, attrs::A
     return push_call!(tape, tanh, args[1])
 end
 
-function load_node!(tape::Tape, ::OpConfig{:ONNX, :MatMul}, args::VarVec, attrs::AttrDict)
-    A_ndims = ndims(args[1]._op.val)
-    B_ndims = ndims(args[2]._op.val)
-    if A_ndims == 2 && B_ndims == 2
-        return push_call!(tape, *, args[2], args[1])
-    elseif A_ndims in (2, 3) && B_ndims in (2, 3)
-        return push_call!(tape, NNlib.batched_mul, args[2], args[1])
-    else
-        error("MatMul with arrays of $A_ndims and $B_ndims is not implemented yet")
-    end
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :Identity}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, identity, args[1])
 end
 
+function onnx_reshape(a, s)
+    new_size = map(((i, dim),) -> dim == 0 ? size(a, ndims(a) - i + 1) : dim == -1 ? (:) : dim, enumerate(s))
+    return reshape(a, Iterators.reverse(new_size)...)
+end
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :Reshape}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, onnx_reshape, args[1], args[2])
+end
+
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :Transpose}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, permutedims, args[1], reverse(attrs[:perm] .+ 1))
+end
+
+function instance_normalize(x, scale, bias; kwargs...)
+    μ = zeros(eltype(x), size(x, ndims(x) - 1))
+    σ² = zeros(eltype(x), size(x, ndims(x) - 1))
+    instance_norm(x, scale, bias, μ, σ²; ϵ=kwargs[:epsilon], training=false)
+end
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :InstanceNormalization}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, instance_normalize, args[1], args[2], args[3]; attrs...)
+end
+
+function batched_mul4(A, B)
+    nA,mA,sA... = size(A)
+    nB,mB,sB... = size(B)
+
+    @assert sA == sB "$sA != $sB"
+    @assert mA == nB "$mA != $nB"
+
+    A = reshape(A, nA, mA, :)
+    B = reshape(B, nB, mB, :)
+
+    C = NNlib.batched_mul(A, B)
+    reshape(C, nA, mB, sA...)
+end
+
+function onnx_matmul(A, B)
+    A_ndims = ndims(A)
+    B_ndims = ndims(B)
+    if A_ndims == 2 && B_ndims == 2
+        return B * A
+    elseif A_ndims in (2, 3) && B_ndims in (2, 3)
+        return NNlib.batched_mul(B, A)
+    else
+        return batched_mul4(B, A)
+    end
+end
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :MatMul}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, onnx_matmul, args...)
+end
+
+function onnx_softmax(x, axis)
+    dims = axis == -1 ? ndims(x) - axis : size(x)
+    return NNlib.softmax(x; dims)
+end
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :Softmax}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, onnx_softmax, args[1], attrs[:axis])
+end
 
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :Sigmoid}, args::VarVec, attrs::AttrDict)
     return push_call!(tape, Broadcast.broadcast, NNlib.sigmoid, args...)
@@ -237,6 +290,58 @@ function load_node!(tape::Tape, ::OpConfig{:ONNX, :Concat}, args::VarVec, attrs:
     return push_call!(tape, onnx_concat, args...; axis)
 end
 
+function onnx_resize(x, output_size, scales, sizes=nothing;
+    antialias=0, mode="nearest", nearest_mode="floor", coordinate_transformation_mode="half_pixel",
+    cubic_coeff_a=-0.75, exclude_outside=0, extrapolation_value=0., keep_aspect_ratio_policy="stretch")
+
+    @assert isnothing(output_size) "Resize currently does not support providing the output size"
+    @assert mode == "nearest" "Only mode == \"nearest\" is currently supported (got \"$mode\")"
+    @assert antialias == 0 "Only antialias == 0 is currently supported (got $antialias)"
+
+    scales = Tuple(Int.(Iterators.reverse(scales)))
+    return NNlib.upsample_nearest(x, scales)
+end
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :Resize}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, onnx_resize, args...; attrs...)
+end
+
+function onnx_cast(x, to)
+    T = if to == 1
+        Float64
+    elseif to == 2
+        UInt8
+    elseif to ==3 
+        Int8
+    elseif to == 4 
+        UInt16
+    elseif to == 5 
+        Int16
+    elseif to == 6 
+        Int32
+    elseif to == 7 
+        Int64
+    elseif to == 8 
+        String
+    elseif to == 9 
+        Bool
+    elseif to == 10
+        Float16
+    elseif to == 11
+        Double
+    elseif to == 12
+        UInt32
+    elseif to == 13
+        UInt64
+    else
+        onnx_type = var"TensorProto.DataType".T(to)
+        error("Unsupported cast to type $onnx_type")
+    end
+    T.(x)
+end
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :Cast}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, onnx_cast, args[1], attrs[:to])
+end
+
 ###############################################################################
 #                                    API                                      #
 ###############################################################################
@@ -263,6 +368,11 @@ function load(io::IO, args...; backends=[:ONNX], exec::Bool=true)
     # create map of initializers
     init_vals = Dict{String, Any}(init.name => array(init)
         for init in g.initializer)
+
+    # https://github.com/onnx/onnx/blob/main/docs/IR.md#optional-inputs-and-outputs
+    optional = push!(tape, Constant(nothing))
+    tape.c.name2var[""] = optional
+
     # load inputs; if input has init value, take it
     # otherwise take the next available argument value
     arg_idx = 1
