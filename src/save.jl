@@ -65,14 +65,15 @@ ValueInfoProto(op::Umlaut.AbstractOp) = ValueInfoProto(
     #     TypeProto_Tensor((4, 3), Float64).shape.dim[1].dim_value
     # which gives 3 instead of 4
     size(op.val),
-    eltype(op.val)
+    eltype(op.val) ∈ (Int, Float64, Float32, Bool) ?
+        eltype(op.val) : Float32,
 )
 
 ##############################################################################
 #                                 Methods                                    #
 ##############################################################################
 
-onnx_name(v::Variable) = "x$(v.id)"
+onnx_name(v::Variable) = isnothing(v._op.val) ? "" : "x$(v.id)"
 onnx_name(op::Umlaut.AbstractOp) = "x$(op.id)"
 
 
@@ -163,6 +164,10 @@ function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(mul)}, op::Umlaut.Ca
     push!(g.node, nd)
 end
 
+function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(div)}, op::Umlaut.Call)
+    nd = NodeProto("Div", op)
+    push!(g.node, nd)
+end
 
 function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(relu)}, op::Umlaut.Call)
     nd = NodeProto("Relu", op)
@@ -180,6 +185,17 @@ function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(tanh)}, op::Umlaut.C
 end
 
 function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(NNlib.batched_mul)}, op::Umlaut.Call)
+    nd = NodeProto(
+        input=[onnx_name(v) for v in reverse(op.args)],
+        output=[onnx_name(op)],
+        name=onnx_name(op),
+        attribute=AttributeProto[],
+        op_type="MatMul"
+    )
+    push!(g.node, nd)
+end
+
+function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(batched_mul4)}, op::Umlaut.Call)
     nd = NodeProto(
         input=[onnx_name(v) for v in reverse(op.args)],
         output=[onnx_name(op)],
@@ -213,6 +229,27 @@ function save_node!(g::GraphProto, ::@opconfig_kw(:ONNX, batch_norm), op::Umlaut
     push!(g.node, nd)
 end
 
+function save_node!(g::GraphProto, ::@opconfig_kw(:ONNX, instance_normalize), op::Umlaut.Call)
+    kw_dict = kwargs2dict(op)
+    attrs = from_nnlib_norm(kw_dict)
+    args = iskwfunc(op.fn) ? op.args[3:end] : op.args
+    output = if Bool(get(attrs, :training_mode, 0))
+        vars = unpacked_vars(op)
+        @assert(all([v isa V for v in vars]),
+            "Not all output vars of batch_norm are unpacked to the tape")
+        [onnx_name(v) for v in vars]
+    else
+        [onnx_name(op)]
+    end
+    nd = NodeProto(
+        input=[onnx_name(v) for v in args],
+        output=output,
+        name=onnx_name(op),
+        attribute=AttributeProto[AttributeProto(k, v) for (k, v) in attrs],
+        op_type="InstanceNormalization"
+    )
+    push!(g.node, nd)
+end
 
 function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(size)}, op::Umlaut.Call)
     nd = NodeProto("Shape", op)
@@ -281,6 +318,75 @@ function save_node!(g::GraphProto, ::@opconfig_kw(:ONNX, onnx_concat), op::Umlau
     push!(g.node, nd)
 end
 
+function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(identity)}, op::Umlaut.Call)
+    nd = NodeProto("Identity", op)
+    push!(g.node, nd)
+end
+
+function save_node!(g::GraphProto, ::@opconfig_kw(:ONNX, onnx_reshape), op::Umlaut.Call)
+    nd = NodeProto("Reshape", op)
+    push!(g.node, nd)
+end
+
+function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(size_vector)}, op::Umlaut.Call)
+    INLINE_SHAPES = true
+    if INLINE_SHAPES
+        push!(g.initializer, TensorProto(op.val, onnx_name(op)))
+    else
+        nd = NodeProto("Shape", op)
+        push!(g.node, nd)
+    end
+end
+
+function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(sigmoid)}, op::Umlaut.Call)
+    nd = NodeProto("Sigmoid", op)
+    push!(g.node, nd)
+end
+
+function save_node!(g::GraphProto, ::@opconfig_kw(:ONNX, onnx_softmax), op::Umlaut.Call)
+    nd = NodeProto("Softmax", op)
+    push!(g.node, nd)
+end
+
+function save_node!(g::GraphProto, ::@opconfig_kw(:ONNX, onnx_cast), op::Umlaut.Call)
+    attrs = kwargs2dict(op)
+    nd = NodeProto(
+        input=[onnx_name(op.args[3])],
+        output=[onnx_name(op)],
+        name=onnx_name(op),
+        attribute=AttributeProto.(keys(attrs), values(attrs)),
+        op_type="Cast"
+    )
+    push!(g.node, nd)
+end
+
+function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(permutedims)}, op::Umlaut.Call)
+    @assert length(op.args) == 2
+    x, size = op.args
+    nd = NodeProto(
+        input=[onnx_name(x)],
+        output=[onnx_name(op)],
+        name=onnx_name(op),
+        attribute=AttributeProto[AttributeProto("perm", reverse(size .- 1))],
+        op_type="Transpose"
+    )
+    push!(g.node, nd)
+end
+
+function save_node!(g::GraphProto, ::@opconfig_kw(:ONNX, onnx_resize), op::Umlaut.Call)
+    attrs = kwargs2dict(op)
+    args = iskwfunc(op.fn) ? op.args[3:end] : op.args
+    input = [onnx_name(v) for v in args]
+    nd = NodeProto(;
+        input,
+        output=[onnx_name(op)],
+        name=onnx_name(op),
+        attribute=AttributeProto.(keys(attrs), values(attrs)),
+        op_type="Resize"
+    )
+    push!(g.node, nd)
+end
+
 ##############################################################################
 #                                    API                                     #
 ##############################################################################
@@ -304,7 +410,9 @@ function save(io::IO, tape::Tape{ONNXCtx})
             # add constant to g.initializer, but not to g.input
             # some models out there also put constants & parameters
             # to g.init, but it seems to be an outdated practise
-            push!(g.initializer, TensorProto(op.val, onnx_name(op)))
+            if !isnothing(op.val)
+                push!(g.initializer, TensorProto(op.val, onnx_name(op)))
+            end
         elseif op isa Umlaut.Call
             save_node!(g, op)
         else

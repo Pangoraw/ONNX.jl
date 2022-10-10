@@ -176,32 +176,29 @@ function batched_mul4(A, B)
     C = NNlib.batched_mul(A, B)
     reshape(C, nA, mB, sA...)
 end
-
-function onnx_matmul(A, B)
-    A_ndims = ndims(A)
-    B_ndims = ndims(B)
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :MatMul}, args::VarVec, attrs::AttrDict)
+    A_ndims = ndims(args[1]._op.val)
+    B_ndims = ndims(args[2]._op.val)
     if A_ndims == 2 && B_ndims == 2
-        return B * A
+        return push_call!(tape, *, args[2], args[1])
     elseif A_ndims in (2, 3) && B_ndims in (2, 3)
-        return NNlib.batched_mul(B, A)
+        return push_call!(tape, NNlib.batched_mul, args[2], args[1])
     else
-        return batched_mul4(B, A)
+        return push_call!(tape, batched_mul4, args[2], args[1])
     end
 end
-function load_node!(tape::Tape, ::OpConfig{:ONNX, :MatMul}, args::VarVec, attrs::AttrDict)
-    return push_call!(tape, onnx_matmul, args...)
-end
 
-function onnx_softmax(x, axis)
+function onnx_softmax(x; axis)
     dims = axis == -1 ? ndims(x) - axis : size(x)
     return NNlib.softmax(x; dims)
 end
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :Softmax}, args::VarVec, attrs::AttrDict)
-    return push_call!(tape, onnx_softmax, args[1], attrs[:axis])
+    return push_call!(tape, onnx_softmax, args[1]; axis=attrs[:axis])
 end
 
+sigmoid(x) = NNlib.sigmoid.(x)
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :Sigmoid}, args::VarVec, attrs::AttrDict)
-    return push_call!(tape, Broadcast.broadcast, NNlib.sigmoid, args...)
+    return push_call!(tape, sigmoid, args...)
 end
 
 
@@ -294,7 +291,7 @@ function onnx_resize(x, output_size, scales, sizes=nothing;
     antialias=0, mode="nearest", nearest_mode="floor", coordinate_transformation_mode="half_pixel",
     cubic_coeff_a=-0.75, exclude_outside=0, extrapolation_value=0., keep_aspect_ratio_policy="stretch")
 
-    @assert isnothing(output_size) "Resize currently does not support providing the output size"
+    @assert isnothing(output_size) "Resize currently does not support providing the output size (output_size = $(output_size)"
     @assert mode == "nearest" "Only mode == \"nearest\" is currently supported (got \"$mode\")"
     @assert antialias == 0 "Only antialias == 0 is currently supported (got $antialias)"
 
@@ -305,24 +302,24 @@ function load_node!(tape::Tape, ::OpConfig{:ONNX, :Resize}, args::VarVec, attrs:
     return push_call!(tape, onnx_resize, args...; attrs...)
 end
 
-function onnx_cast(x, to)
+function onnx_cast(x; to)
     T = if to == 1
         Float64
     elseif to == 2
         UInt8
-    elseif to ==3 
+    elseif to == 3
         Int8
-    elseif to == 4 
+    elseif to == 4
         UInt16
-    elseif to == 5 
+    elseif to == 5
         Int16
-    elseif to == 6 
+    elseif to == 6
         Int32
-    elseif to == 7 
+    elseif to == 7
         Int64
-    elseif to == 8 
+    elseif to == 8
         String
-    elseif to == 9 
+    elseif to == 9
         Bool
     elseif to == 10
         Float16
@@ -332,14 +329,17 @@ function onnx_cast(x, to)
         UInt32
     elseif to == 13
         UInt64
-    else
+    elseif to ∈ (0, 14, 15, 16)
         onnx_type = var"TensorProto.DataType".T(to)
         error("Unsupported cast to type $onnx_type")
+    else
+        error("Invalid ONNX DataType $to")
     end
-    T.(x)
+
+    return T.(x)
 end
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :Cast}, args::VarVec, attrs::AttrDict)
-    return push_call!(tape, onnx_cast, args[1], attrs[:to])
+    return push_call!(tape, onnx_cast, args[1]; to=attrs[:to])
 end
 
 ###############################################################################
@@ -368,10 +368,6 @@ function load(io::IO, args...; backends=[:ONNX], exec::Bool=true)
     # create map of initializers
     init_vals = Dict{String, Any}(init.name => array(init)
         for init in g.initializer)
-
-    # https://github.com/onnx/onnx/blob/main/docs/IR.md#optional-inputs-and-outputs
-    optional = push!(tape, Constant(nothing))
-    tape.c.name2var[""] = optional
 
     # load inputs; if input has init value, take it
     # otherwise take the next available argument value
@@ -405,6 +401,11 @@ function load(io::IO, args...; backends=[:ONNX], exec::Bool=true)
             tape.c.name2var[name] = v
         end
     end
+
+    # https://github.com/onnx/onnx/blob/main/docs/IR.md#optional-inputs-and-outputs
+    optional = push!(tape, Constant(nothing))
+    tape.c.name2var[""] = optional
+
     # load nodes
     for nd in g.node
         success = false
