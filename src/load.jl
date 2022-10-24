@@ -60,6 +60,9 @@ function load_node!(tape::Tape, nd::NodeProto, backend::Symbol)
                 tape.c.name2var[nd.output[i]] = out[i]
             end
         else
+                if nd.output[1] == "onnx::Slice_716"
+                    @show conf attrs
+                end
             tape.c.name2var[nd.output[1]] = out
         end
     catch
@@ -154,10 +157,10 @@ function load_node!(tape::Tape, ::OpConfig{:ONNX, :Transpose}, args::VarVec, att
     return push_call!(tape, permutedims, args[1], reverse(attrs[:perm] .+ 1))
 end
 
-function instance_normalize(x, scale, bias; kwargs...)
-    μ = zeros(eltype(x), size(x, ndims(x) - 1))
-    σ² = zeros(eltype(x), size(x, ndims(x) - 1))
-    instance_norm(x, scale, bias, μ, σ²; ϵ=kwargs[:epsilon], training=false)
+function instance_normalize(x::AbstractArray{T}, scale, bias; kwargs...) where T
+    μ = zeros(T, size(x, ndims(x) - 1))
+    σ² = zeros(T, size(x, ndims(x) - 1))
+    return instance_norm(x, scale, bias, μ, σ²; ϵ=get(kwargs, :epsilon, T(1f-5)), training=false)
 end
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :InstanceNormalization}, args::VarVec, attrs::AttrDict)
     return push_call!(tape, instance_normalize, args[1], args[2], args[3]; attrs...)
@@ -224,7 +227,11 @@ function load_node!(tape::Tape, ::OpConfig{:ONNX, :Shape}, args::VarVec, attrs::
     return push_call!(tape, size_vector, args[1])
 end
 
-
+onnx_fill(val, s) = fill(val, s...)
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :ConstantOfShape}, args::VarVec, attrs::AttrDict)
+    val = array(attrs[:value]) |> only
+    return push_call!(tape, onnx_fill, val, args[1])
+end
 
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :Constant}, args::VarVec, attrs::AttrDict)
     val_attr = first(keys(attrs))
@@ -236,6 +243,36 @@ function load_node!(tape::Tape, ::OpConfig{:ONNX, :Constant}, args::VarVec, attr
     return push!(tape, Constant(val))
 end
 
+function onnx_where(cond, x, y)
+    out = similar(x)
+    for i in eachindex(out)
+        out[i] = cond[i] ? x[i] : y[i]
+    end
+    out
+end
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :Where}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, onnx_where, args...)
+end
+
+onnx_expand(x, s) = x .* ones(s...)
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :Expand}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, onnx_expand, args...)
+end
+
+onnx_eq(a, b) = a .== b
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :Equal}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, onnx_eq, args...)
+end
+
+onnx_sin(x) = sin.(x)
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :Sin}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, onnx_sin, args[1])
+end
+
+onnx_cos(x) = cos.(x)
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :Cos}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, onnx_cos, args[1])
+end
 
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :Gather}, args::VarVec, attrs::AttrDict)
     axis = get(attrs, :axis, 0)

@@ -222,10 +222,11 @@ function onnx_slice(
     steps = isempty(steps) ? [1 for i=1:ndims(data)] : steps
     @assert all(starts .>= 0) "Negative indices are not supported yet"
     @assert all(ends .>= 0) "Negative indices are not supported yet"
-    # construct ranges, adjusting starts to 1-based indexing
-    ranges = [s+1 : st : e for (s, st, e) in zip(starts, steps, ends)]
     # reversed, 1-based dimensions
     dims = ndims(data) .- axes
+    # construct ranges, adjusting starts to 1-based indexing
+    ranges = [s+1 : st : clamp(e, 0, size(data, dim))
+              for (s, st, e, dim) in zip(starts, steps, ends, dims)]
     # dimension => range mapping
     d2r = Dict(zip(dims, ranges))
     I = [get(d2r, i, (:)) for i=1:ndims(data)]

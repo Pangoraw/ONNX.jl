@@ -26,7 +26,35 @@ function array(p::TensorProto, wrap=Array)
     T = ONNX2JULIA_TYPES[p.data_type]
     fld = get(ONNX2JULIA_DATA_FIELDS, p.data_type, :raw_data)
     bytes = getproperty(p, fld)
-    data = !isempty(bytes) ? reinterpret(T, bytes) : reinterpret(T, p.raw_data)
+    data = if p.data_location == var"TensorProto.DataLocation".DEFAULT
+        !isempty(bytes) ? reinterpret(T, bytes) : reinterpret(T, p.raw_data)
+    else
+        location = p.external_data[findfirst(ss -> ss.key == "location", p.external_data)].value
+        offset = let
+            offset = get(p.external_data,
+                         findfirst(ss -> ss.key == "offset", p.external_data),
+                         nothing)
+            isnothing(offset) ? 0 : parse(Int, offset.value)
+        end
+        length = let
+            length = get(p.external_data,
+                         findfirst(ss -> ss.key == "length", p.external_data),
+                         nothing)
+            isnothing(length) ? typemax(Int) : parse(Int, length.value)
+        end
+
+        file = open(joinpath("/home/pberg/Projects/wnn/", location))
+        seek(file, offset)
+        bytes = read(file, length)
+        reinterpret(T, bytes)
+    end
+
+    if ndims(p.dims) == 1 && Base.length(p.dims) == 1 &&  p.dims[1] == 1
+        # if data[1] > 100000
+            # data[1] = 1
+        # end
+    end
+
     # note that we don't permute dimensions here, only reshape the data
     # see "Row-/Columns-major" in test/readwrite.jl for an example
     # why we don't need permutedims here
