@@ -47,8 +47,14 @@ end
 
 add(xs...) = .+(xs...)
 sub(xs...) = .-(xs...)
-mul(xs...) = .*(xs...)
-div(xs...) = ./(xs...)
+mul(xs...) = begin
+    @info "Mul" sizes=[size(x) for x in xs]
+    .*(xs...)
+end
+div(xs...) = begin
+    @info "Div" sizes=[size(x) for x in xs]
+    ./(xs...)
+end
 relu(x) = NNlib.relu.(x)
 elu(x) = NNlib.elu.(x)
 tanh(x) = Base.tanh.(x)

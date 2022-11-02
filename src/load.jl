@@ -296,6 +296,43 @@ function load_node!(tape::Tape, ::OpConfig{:ONNX, :Unsqueeze}, args::VarVec, att
     end
 end
 
+function onnx_reduce_mean(x; axes=nothing, keepdims=1)
+    old_size = size(x)
+    out = if isnothing(axes)
+        mean(x)
+    else
+        dims = [axis >= 0 ? ndims(x) - axis : -axis for axis in axes]
+        mean(x; dims)
+    end
+
+    out = if keepdims == 1
+        out
+    elseif isnothing(axes)
+        reshape(out, (1 for _ in old_size)...)
+    else
+        dims = [axis >= 0 ? ndims(x) - axis : -axis for axis in axes]
+        reshape(out, [d for (i, d) in enumerate(old_size) if i ∉ dims]...)
+    end
+    @info "ReduceMean" old_size new_size=size(out) keepdims axe=axes[begin]
+
+    out
+end
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :ReduceMean}, args::VarVec, attrs::AttrDict)
+    axes = get(attrs, :axes, nothing)
+    keepdims = get(attrs, :keepdims, 1)
+    return push_call!(tape, onnx_reduce_mean, args[1]; axes, keepdims)
+end
+
+onnx_pow(x, y) = x .^ y
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :Pow}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, onnx_pow, args...)
+end
+
+onnx_sqrt(x) = sqrt.(x)
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :Sqrt}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, onnx_sqrt, args[begin])
+end
+
 
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :Slice}, args::VarVec, attrs::AttrDict)
     return push_call!(tape, onnx_slice, args...)
