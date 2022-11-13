@@ -126,6 +126,44 @@ TensorProto(t::AbstractArray, data_type::Int32, name) = TensorProto(
     raw_data = reinterpret(UInt8, reshape(t, :)),
     name=name)
 
+TensorProto(t::AbstractArray{Int64,N}, name=""; location, offset, length) where N =
+    TensorProto(
+        dims=collect(reverse(size(t))),
+        data_type=var"TensorProto.DataType".INT64 |> Integer,
+        data_location=var"TensorProto.DataLocation".EXTERNAL,
+        external_data=[
+            StringStringEntryProto("location", location),
+            StringStringEntryProto("offset", offset),
+            StringStringEntryProto("length", length),
+        ],
+        name=name,
+    )
+
+TensorProto(t::AbstractArray{Float64,N}, name=""; location, offset, length) where N =
+    TensorProto(
+        dims=collect(reverse(size(t))),
+        data_type=var"TensorProto.DataType".DOUBLE |> Integer,
+        data_location=var"TensorProto.DataLocation".EXTERNAL,
+        external_data=[
+            StringStringEntryProto("location", location),
+            StringStringEntryProto("offset", offset),
+            StringStringEntryProto("length", length),
+        ],
+        name=name,
+    )
+
+TensorProto(t::AbstractArray{Float32,N}, name=""; location, offset, length) where N =
+    TensorProto(
+        dims=collect(reverse(size(t))),
+        data_type=var"TensorProto.DataType".FLOAT |> Integer,
+        data_location=var"TensorProto.DataLocation".EXTERNAL,
+        external_data=[
+            StringStringEntryProto("location", location),
+            StringStringEntryProto("offset", offset),
+            StringStringEntryProto("length", length),
+        ],
+        name=name,
+    )
 
 function Base.show(io::IO, a::AttributeProto)
     print(io, "AttributeProto($(attribute(a)))")

@@ -480,8 +480,16 @@ controlled by methods of [save_node!](@ref).
 
 See also: [`load!`](@ref)
 """
-function save(io::IO, tape::Tape{ONNXCtx})
+function save(io::IO, tape::Tape{ONNXCtx}; external=false)
     g = graphproto("generated_model")
+
+
+    if external
+        file = open("model.data", "w")
+    end
+
+    offset = 0
+
     for (i, op) in enumerate(tape)
         if op isa Umlaut.Input
             # add input to g.input, but not to g.initializer
@@ -491,7 +499,15 @@ function save(io::IO, tape::Tape{ONNXCtx})
             # some models out there also put constants & parameters
             # to g.init, but it seems to be an outdated practise
             if !isnothing(op.val)
-                push!(g.initializer, TensorProto(op.val, onnx_name(op)))
+                if external && sizeof(op.val) > 64
+                    l = write(file, reshape(op.val, :))
+                    push!(g.initializer,
+                          TensorProto(op.val, onnx_name(op);
+                                      offset, length=l, location="model.data"))
+                    offset += l
+                else
+                    push!(g.initializer, TensorProto(op.val, onnx_name(op)))
+                end
             end
         elseif op isa Umlaut.Call
             save_node!(g, op)
