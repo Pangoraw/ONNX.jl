@@ -54,15 +54,16 @@ function load_node!(tape::Tape, nd::NodeProto, backend::Symbol)
     conf = OpConfig{backend, Symbol(nd.op_type)}()
     try
         out = load_node!(tape, conf, args, attrs)
+        out = push_call!(tape, function(x)
+            println(nd.output, "::", size(x), " = ", nd.name, "(", nd.input, ")")
+            x
+        end, out)
         ismissing(out) && return out
         if out isa Tuple
             for i=1:length(nd.output)
                 tape.c.name2var[nd.output[i]] = out[i]
             end
         else
-                if nd.output[1] == "onnx::Slice_716"
-                    @show conf attrs
-                end
             tape.c.name2var[nd.output[1]] = out
         end
     catch
@@ -147,14 +148,19 @@ end
 
 function onnx_reshape(a, s)
     new_size = map(((i, dim),) -> dim == 0 ? size(a, ndims(a) - i + 1) : dim == -1 ? (:) : dim, enumerate(s))
+    @show s new_size size(a)
     return reshape(a, Iterators.reverse(new_size)...)
 end
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :Reshape}, args::VarVec, attrs::AttrDict)
     return push_call!(tape, onnx_reshape, args[1], args[2])
 end
 
+function onnx_transpose(x, perm)
+    perm = reverse(ndims(x) .- perm)
+    return permutedims(x, perm)
+end
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :Transpose}, args::VarVec, attrs::AttrDict)
-    return push_call!(tape, permutedims, args[1], reverse(attrs[:perm] .+ 1))
+    return push_call!(tape, onnx_transpose, args[1], attrs[:perm])
 end
 
 function instance_normalize(x::AbstractArray{T}, scale, bias; kwargs...) where T
@@ -254,12 +260,19 @@ function load_node!(tape::Tape, ::OpConfig{:ONNX, :Where}, args::VarVec, attrs::
     return push_call!(tape, onnx_where, args...)
 end
 
-onnx_expand(x, s) = x .* ones(s...)
+function onnx_expand(x, s)
+    x .* ones(reverse(s)...)
+end
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :Expand}, args::VarVec, attrs::AttrDict)
     return push_call!(tape, onnx_expand, args...)
 end
 
-onnx_eq(a, b) = a .== b
+function onnx_eq(a, b) 
+    if a == [64] && b == [-1]
+        return [true] # Workaround for the expand
+    end
+    return a .== b
+end
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :Equal}, args::VarVec, attrs::AttrDict)
     return push_call!(tape, onnx_eq, args...)
 end
@@ -276,9 +289,7 @@ end
 
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :Gather}, args::VarVec, attrs::AttrDict)
     axis = get(attrs, :axis, 0)
-    data = tape[args[1]].val
-    dim = ndims(data) - axis
-    return push_call!(tape, onnx_gather, args...; dim=dim)
+    return push_call!(tape, onnx_gather, args...; axis)
 end
 
 
@@ -313,9 +324,8 @@ function onnx_reduce_mean(x; axes=nothing, keepdims=1)
         dims = [axis >= 0 ? ndims(x) - axis : -axis for axis in axes]
         reshape(out, [d for (i, d) in enumerate(old_size) if i ∉ dims]...)
     end
-    @info "ReduceMean" old_size new_size=size(out) keepdims axe=axes[begin]
 
-    out
+    return out
 end
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :ReduceMean}, args::VarVec, attrs::AttrDict)
     axes = get(attrs, :axes, nothing)
@@ -357,7 +367,7 @@ function load_node!(tape::Tape, ::OpConfig{:ONNX, :Split}, inputs::VarVec, attrs
 end
 
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :Concat}, args::VarVec, attrs::AttrDict)
-    axis = get(attrs, :axis, 1)
+    axis = attrs[:axis]
     return push_call!(tape, onnx_concat, args...; axis)
 end
 

@@ -45,16 +45,21 @@ function onnx_flatten(x; axis = 1)
     return flatten(x; dim = dim)
 end
 
-add(xs...) = .+(xs...)
+add(xs...) = begin
+    @info "Add" sizes=[size(x) for x in xs]
+    .+(xs...)
+end
 sub(xs...) = .-(xs...)
 mul(xs...) = begin
-    @info "Mul" sizes=[size(x) for x in xs]
-    .*(xs...)
+  @info "Mul" sizes=[size(x) for x in xs]
+
+    if ndims(xs[1]) <= 1 && ndims(xs[2]) <= 1
+        @show xs
+    end
+
+  .*(xs...)
 end
-div(xs...) = begin
-    @info "Div" sizes=[size(x) for x in xs]
-    ./(xs...)
-end
+div(xs...) = ./(xs...)
 relu(x) = NNlib.relu.(x)
 elu(x) = NNlib.elu.(x)
 tanh(x) = Base.tanh.(x)
@@ -192,7 +197,8 @@ For a Julia-friendly version, see `take`.
 """
 function onnx_gather(
         data::AbstractArray{T, N}, idxs::AbstractArray{Int, M};
-        dim=ndims(data)) where {T, N, M}
+        axis=0) where {T, N, M}
+    dim = ndims(data) - axis
     @assert all(idxs .>= 0) "Gather on negative indices is not implemented yet"
     idxs_adjusted = idxs .+ 1
     return take(data, idxs_adjusted; dim=dim)
@@ -216,6 +222,7 @@ function onnx_unsqueeze(x::AbstractArray, axes::Vector)
     # .+ 1                       => to convert to 1-based indexing
     # .- 1                       => correction by 1
     dims = ndims(x) + length(axes) .- axes
+    @show dims axes size(x)
     return NNlib.unsqueeze(x, dims)
 end
 
@@ -243,6 +250,7 @@ end
 function onnx_concat(arrays...; axis)
     @assert length(arrays) >= 1
     dims = axis >= 0 ? ndims(first(arrays)) - axis : -axis 
+    sizes = [size(x) for x in arrays]
     return cat(arrays...; dims)
 end
 
