@@ -54,16 +54,20 @@ function load_node!(tape::Tape, nd::NodeProto, backend::Symbol)
     conf = OpConfig{backend, Symbol(nd.op_type)}()
     try
         out = load_node!(tape, conf, args, attrs)
-        out = push_call!(tape, function(x)
-            println(nd.output, "::", size(x), " = ", nd.name, "(", nd.input, ")")
-            x
-        end, out)
+        # out = push_call!(tape, function(x)
+        #     println(nd.output, "::", size(x), " = ", nd.name, "(", nd.input, ")")
+        #     x
+        # end, out)
         ismissing(out) && return out
         if out isa Tuple
             for i=1:length(nd.output)
                 tape.c.name2var[nd.output[i]] = out[i]
             end
         else
+            # out = push_call!(tape, function(x)
+            #     @info "$(nd.name)[$(nd.op_type)]" s = size(x)
+            #     x
+            # end, out)
             tape.c.name2var[nd.output[1]] = out
         end
     catch
@@ -142,6 +146,10 @@ function load_node!(tape::Tape, ::OpConfig{:ONNX, :Tanh}, args::VarVec, attrs::A
     return push_call!(tape, tanh, args[1])
 end
 
+function load_node!(tape::Tape, ::OpConfig{:ONNX, :Erf}, args::VarVec, attrs::AttrDict)
+    return push_call!(tape, erf, args[1])
+end
+
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :Identity}, args::VarVec, attrs::AttrDict)
     return push_call!(tape, identity, args[1])
 end
@@ -173,6 +181,11 @@ function load_node!(tape::Tape, ::OpConfig{:ONNX, :InstanceNormalization}, args:
 end
 
 function batched_mul4(A, B)
+    @show ndims(A) ndims(B) size(A) size(B)
+    if ndims(A) == 0 || ndims(B) == 0
+        return A .* B
+    end
+
     nA,mA,sA... = size(A)
     nB,mB,sB... = size(B)
 
@@ -233,7 +246,7 @@ function load_node!(tape::Tape, ::OpConfig{:ONNX, :Shape}, args::VarVec, attrs::
     return push_call!(tape, size_vector, args[1])
 end
 
-onnx_fill(val, s) = fill(val, s...)
+onnx_fill(val, s) = fill(val, reverse(s)...)
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :ConstantOfShape}, args::VarVec, attrs::AttrDict)
     val = array(attrs[:value]) |> only
     return push_call!(tape, onnx_fill, val, args[1])
@@ -268,9 +281,9 @@ function load_node!(tape::Tape, ::OpConfig{:ONNX, :Expand}, args::VarVec, attrs:
 end
 
 function onnx_eq(a, b) 
-    if a == [64] && b == [-1]
-        return [true] # Workaround for the expand
-    end
+    # if a == [64] && b == [-1]
+        # return [true] # Workaround for the expand
+    #end
     return a .== b
 end
 function load_node!(tape::Tape, ::OpConfig{:ONNX, :Equal}, args::VarVec, attrs::AttrDict)

@@ -84,6 +84,7 @@ onnx_name(op::Umlaut.AbstractOp) = "x$(op.id)"
 Serialize a single operation from a tape to graph.
 """
 function save_node!(g::GraphProto, op::Umlaut.Call)
+    # @info "Saving $(op)" fn = op.fn name = nameof(op.fn) m = methods(op.fn)
     save_node!(g, OpConfig{:ONNX, typeof(op.fn)}(), op)
 end
 
@@ -158,6 +159,10 @@ function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(add)}, op::Umlaut.Ca
     push!(g.node, nd)
 end
 
+function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(sub)}, op::Umlaut.Call)
+    nd = NodeProto("Sub", op)
+    push!(g.node, nd)
+end
 
 function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(mul)}, op::Umlaut.Call)
     nd = NodeProto("Mul", op)
@@ -166,6 +171,26 @@ end
 
 function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(div)}, op::Umlaut.Call)
     nd = NodeProto("Div", op)
+    push!(g.node, nd)
+end
+
+function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(onnx_pow)}, op::Umlaut.Call)
+    nd = NodeProto("Pow", op)
+    push!(g.node, nd)
+end
+
+function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(onnx_eq)}, op::Umlaut.Call)
+    nd = NodeProto("Equal", op)
+    push!(g.node, nd)
+end
+
+function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(onnx_where)}, op::Umlaut.Call)
+    nd = NodeProto("Where", op)
+    push!(g.node, nd)
+end
+
+function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(onnx_expand)}, op::Umlaut.Call)
+    nd = NodeProto("Expand", op)
     push!(g.node, nd)
 end
 
@@ -179,8 +204,28 @@ function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(elu)}, op::Umlaut.Ca
     push!(g.node, nd)
 end
 
+function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(onnx_sqrt)}, op::Umlaut.Call)
+    nd = NodeProto("Sqrt", op)
+    push!(g.node, nd)
+end
+
 function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(tanh)}, op::Umlaut.Call)
     nd = NodeProto("Tanh", op)
+    push!(g.node, nd)
+end
+
+function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(onnx_cos)}, op::Umlaut.Call)
+    nd = NodeProto("Cos", op)
+    push!(g.node, nd)
+end
+
+function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(onnx_sin)}, op::Umlaut.Call)
+    nd = NodeProto("Sin", op)
+    push!(g.node, nd)
+end
+
+function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(erf)}, op::Umlaut.Call)
+    nd = NodeProto("Erf", op)
     push!(g.node, nd)
 end
 
@@ -251,6 +296,19 @@ function save_node!(g::GraphProto, ::@opconfig_kw(:ONNX, instance_normalize), op
     push!(g.node, nd)
 end
 
+function save_node!(g::GraphProto, ::@opconfig_kw(:ONNX, onnx_reduce_mean), op::Umlaut.Call)
+    attrs = kwargs2dict(op)
+    args = iskwfunc(op.fn) ? op.args[3:end] : op.args
+    nd = NodeProto(
+        input=[onnx_name(v) for v in args],
+        output=[onnx_name(op)],
+        name=onnx_name(op),
+        attribute=AttributeProto[AttributeProto(k, v) for (k, v) in attrs],
+        op_type="ReduceMean"
+    )
+    push!(g.node, nd)
+end
+
 function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(size)}, op::Umlaut.Call)
     nd = NodeProto("Shape", op)
     push!(g.node, nd)
@@ -274,6 +332,18 @@ function save_node!(g::GraphProto, ::OpConfig{:ONNX, <:Any}, op::Umlaut.Constant
     push!(g.node, nd)
 end
 
+function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(onnx_fill)}, op::Umlaut.Call)
+    attr_name = :value
+    attr_value = TensorProto([op.args[1]], onnx_name(op) * "_value")
+    nd = NodeProto(
+        input=[onnx_name(op.args[2])],
+        output=[onnx_name(op)],
+        name=onnx_name(op),
+        attribute=AttributeProto.([attr_name], [attr_value]),
+        op_type="ConstantOfShape",
+    )
+    push!(g.node, nd)
+end
 
 function save_node!(g::GraphProto, ::@opconfig_kw(:ONNX, onnx_gather), op::Umlaut.Call)
     data = iskwfunc(op.fn) ? op.args[3]._op.val : op.args[1]._op.val
@@ -325,6 +395,16 @@ end
 
 function save_node!(g::GraphProto, ::@opconfig_kw(:ONNX, onnx_reshape), op::Umlaut.Call)
     nd = NodeProto("Reshape", op)
+    push!(g.node, nd)
+end
+
+function save_node!(g::GraphProto, ::@opconfig_kw(:ONNX, onnx_transpose), op::Umlaut.Call)
+    nd = NodeProto(
+        input=[onnx_name(op.args[1])],
+        output = [onnx_name(op)],
+        attribute=[AttributeProto(:perm, op.args[2])],
+        op_type="Transpose",
+    )
     push!(g.node, nd)
 end
 

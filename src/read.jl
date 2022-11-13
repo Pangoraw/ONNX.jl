@@ -29,8 +29,8 @@ function array(p::TensorProto, wrap=Array)
 
     data = if p.data_location == var"TensorProto.DataLocation".DEFAULT
         !isempty(bytes) ? reinterpret(T, bytes) : reinterpret(T, p.raw_data)
-    elseif prod(p.dims) >= 1_000 # Zero width type
-        return fill(Main.Flux.nil, reverse(p.dims)...)
+    # elseif prod(p.dims) >= 1_000 # Zero width type
+    #   return fill(Main.Flux.nil, reverse(p.dims)...)
     else
         location = p.external_data[findfirst(ss -> ss.key == "location", p.external_data)].value
         offset = let

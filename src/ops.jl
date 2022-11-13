@@ -46,25 +46,42 @@ function onnx_flatten(x; axis = 1)
 end
 
 add(xs...) = begin
-    @info "Add" sizes=[size(x) for x in xs]
     .+(xs...)
 end
 sub(xs...) = .-(xs...)
 mul(xs...) = begin
-  @info "Mul" sizes=[size(x) for x in xs]
-
-    if ndims(xs[1]) <= 1 && ndims(xs[2]) <= 1
-        @show xs
-    end
-
   .*(xs...)
 end
 div(xs...) = ./(xs...)
+div(a::AbstractArray{<:Integer},
+    b::AbstractArray{<:Integer}) = a .÷ b
 relu(x) = NNlib.relu.(x)
 elu(x) = NNlib.elu.(x)
 tanh(x) = Base.tanh.(x)
 maxpool(x; kernel, pad = 0, stride = 1) = NNlib.maxpool(x, kernel; pad = pad, stride = stride)
 
+
+function erf(x)
+    a1 = 0.0705230784;
+    a2 = 0.0422820123;
+    a3 = 0.0092705272;
+    a4 = 0.0001520143;
+    a5 = 0.0002765672;
+    a6 = 0.0000430638;
+
+    signum = sign(x)
+    x = abs(x);
+    y = a6 * x;
+    y = (a5 + y) * x;
+    y = (a4 + y) * x;
+    y = (a3 + y) * x;
+    y = (a2 + y) * x;
+    y = (a1 + y) * x;
+    y = 1.0 - 1.0 / (y + 1.0)^16;
+
+    y * signum
+end
+erf(x::AbstractArray) = erf.(x)
 
 # common functional implementation for batch and instance normalization based on
 # https://github.com/FluxML/Flux.jl/blob/06970a5fbbb1cb485c5d2cba597a78fb453fc713/src/layers/normalise.jl#L166-L197
@@ -198,6 +215,12 @@ For a Julia-friendly version, see `take`.
 function onnx_gather(
         data::AbstractArray{T, N}, idxs::AbstractArray{Int, M};
         axis=0) where {T, N, M}
+
+    if data isa SVector && length(idxs) == 1 && axis == 0
+        out = [i >= 0 ? data[begin + i] : data[begin + end + i] for i in idxs]
+        return out
+    end
+
     dim = ndims(data) - axis
     @assert all(idxs .>= 0) "Gather on negative indices is not implemented yet"
     idxs_adjusted = idxs .+ 1
@@ -207,14 +230,14 @@ end
 
 # julia-friendly
 function NNlib.unsqueeze(x::AbstractArray, dims)
-    new_shape = collect(size(x))
+    new_shape = collect(Int, size(x))
     for d in sort(collect(dims))
         insert!(new_shape, d, 1)
     end
     return reshape(x, new_shape...)
 end
 
-
+onnx_unsqueeze(x::Real, axes::Vector) = onnx_unsqueeze([x], axes)
 # ONNX-friendly, e.g. axes is 0-based, row-major
 function onnx_unsqueeze(x::AbstractArray, axes::Vector)
     # ndims(data) + length(axes) => size of the array after unsqueezing
@@ -249,6 +272,7 @@ end
 # ONNX version of concat, axis is zero-based
 function onnx_concat(arrays...; axis)
     @assert length(arrays) >= 1
+    @info "types" types = [typeof(a) for a in arrays]
     dims = axis >= 0 ? ndims(first(arrays)) - axis : -axis 
     sizes = [size(x) for x in arrays]
     return cat(arrays...; dims)
