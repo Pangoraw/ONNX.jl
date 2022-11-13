@@ -499,12 +499,12 @@ function save(io::IO, tape::Tape{ONNXCtx}; external=false)
             # some models out there also put constants & parameters
             # to g.init, but it seems to be an outdated practise
             if !isnothing(op.val)
-                if external && sizeof(op.val) > 64
-                    l = write(file, reshape(op.val, :))
+                if external && prod(size(op.val)) > 64
+                    bytes_length = write(file, reshape(op.val, :))
                     push!(g.initializer,
-                          TensorProto(op.val, onnx_name(op);
-                                      offset, length=l, location="model.data"))
-                    offset += l
+                          TensorProto(op.val, onnx_name(op),
+                                      "model.data", offset, bytes_length))
+                    offset += bytes_length
                 else
                     push!(g.initializer, TensorProto(op.val, onnx_name(op)))
                 end
@@ -533,8 +533,8 @@ function save(io::IO, tape::Tape{ONNXCtx}; external=false)
 end
 
 
-function save(filename::String, tape::Tape{ONNXCtx})
+function save(filename::String, tape::Tape{ONNXCtx}; external=false)
     open(filename, "w") do io
-        save(io, tape)
+        save(io, tape; external)
     end
 end

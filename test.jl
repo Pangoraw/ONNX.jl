@@ -47,4 +47,4 @@ Umlaut.inputs!(model,
                rand(Float32, latent_size...),
                rand(Float32, size(timestep)...),
                rand(Float32, size(encoder_hidden_states)...))
-ONNX.save("./model_512.onnx", model)
+ONNX.save("./model_512.onnx", model; external=true)
