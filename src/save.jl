@@ -393,8 +393,22 @@ function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(identity)}, op::Umla
     push!(g.node, nd)
 end
 
+const INLINE_SHAPES = true
+
 function save_node!(g::GraphProto, ::@opconfig_kw(:ONNX, onnx_reshape), op::Umlaut.Call)
-    nd = NodeProto("Reshape", op)
+    nd = if INLINE_SHAPES
+        new_size = op.args[2]
+        new_size_name = onnx_name(new_size) * "_shape"
+        push!(g.initializer, TensorProto(new_size._op.val, new_size_name))
+
+        NodeProto(
+            input=[onnx_name(op.args[1]), new_size_name],
+            output=[onnx_name(op)],
+            op_type="Reshape",
+        )
+    else
+        NodeProto("Reshape", op)
+    end
     push!(g.node, nd)
 end
 
@@ -409,7 +423,6 @@ function save_node!(g::GraphProto, ::@opconfig_kw(:ONNX, onnx_transpose), op::Um
 end
 
 function save_node!(g::GraphProto, ::OpConfig{:ONNX, typeof(size_vector)}, op::Umlaut.Call)
-    INLINE_SHAPES = true
     if INLINE_SHAPES
         push!(g.initializer, TensorProto(op.val, onnx_name(op)))
     else
